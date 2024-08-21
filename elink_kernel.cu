@@ -140,10 +140,23 @@ __global__ void compute_ion_match(int *no_linker_mz, int *no_linker_mz_prefix, i
 }
 
 
-// __global__ void filter_record_score_list(float *bm25_score, short* matched, int *result_prefix, int spectrum_num, float filter_score_value, short filter_matched_value, float* result_score, int64_t* return_index, int64_t* result_num) {
-//   int idx = blockDim.x * blockIdx.x + threadIdx.x;
-//   if (idx < spectrum_num) {
-//     int left = result_prefix[idx], right = result_prefix[idx + 1];
+__global__ void filter_valid_score_list(float *bm25_score, short* matched, int *result_prefix,
+ int spectrum_num, float filter_score_value, short filter_matched_value, 
+ float* result_score, int64_t* return_index, int* candidate_num) {
+  int idx = blockDim.x * blockIdx.x + threadIdx.x;
+  if (idx < spectrum_num) {
+    int left = result_prefix[idx], right = result_prefix[idx + 1];
+    int index_left = candidate_num[idx], index_right = candidate_num[idx + 1];
+    for (int i = left; i < right; i++) {
+      if (bm25_score[i] > filter_score_value && matched[i] > filter_matched_value) {
+        if (index_left >= index_right) {
+          printf("[ERROR] index_left: %d, index_right: %d, idx: %d, i: %d\n", index_left, index_right, idx, i);
+        }
+        result_score[index_left] = bm25_score[i];
+        return_index[index_left] = i;
+        index_left++;
+      }
+    }
     
-//   }
-// }
+  }
+}

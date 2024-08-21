@@ -92,11 +92,23 @@ def get_spectrum_path(directory='spectrum2'):
             spectrum_path.append(os.path.join(directory, filename))
     return spectrum_path
 
+def gen_prefix(array):
+    prefix = [0]
+    for i in range(len(array)):
+        prefix.append(prefix[i] + array[i])
+    return np.array(prefix, dtype=np.int32)
+
+def malloc_valid_candidate(candidate_num):
+    sum_candidate = sum(candidate_num)
+    return np.zeros(sum_candidate + 1, dtype=np.float32), np.zeros(sum_candidate + 1, dtype=np.int64), gen_prefix(candidate_num)
 
 dic_path = "ion_index_only_cross.npz"
 ion_dic, ion_prefix = load_ion_dic(dic_path)
 list_ion_num = load_from_pickle("ion_num_only_cross.pkl")
 list_ion_num_gpu = pycuda.gpuarray.to_gpu(np.array(list_ion_num, dtype=np.int32))
+
+cuda_filepath = "elink_kernel.cu"
+mod = SourceModule(open(cuda_filepath).read())
 
 # spectrums = get_spectrum_path()
 spectrums = ["spectrum2/spectrum_80000_100000.npz"]
@@ -137,8 +149,7 @@ for spectrum_path in spectrums:
 
     print(("gpu malloc time: {}".format(my_timer.elapsed_and_reset())))
 
-    cuda_filepath = "elink_kernel.cu"
-    mod = SourceModule(open(cuda_filepath).read())
+
     block_size = 256
     grid_size = (len(no_linker_mz_prefix) + block_size - 1) // block_size
 
@@ -155,9 +166,15 @@ for spectrum_path in spectrums:
     print("搜索耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed_and_reset()))
     search_time += my_timer.elapsed_and_reset()
 
-    result = result_gpu.get()
+    valid_candidate_score, valid_candidate_index, valid_candidate_prefix = malloc_valid_candidate(candidate_num_gpu.get())
 
-    spectrum_identity = spectrum_path.split("/")[-1].split(".")[0]
+    get_candidate_num = mod.get_function("get_candidate_num")
+    my_timer.reset()
+    get_candidate_num(bm25_score_gpu, result_prefix_gpu, np.int32(len(result_prefix)))
+
+    # result = result_gpu.get()
+
+    # spectrum_identity = spectrum_path.split("/")[-1].split(".")[0]
 
     # f_result = open("{}_elink_result_v2.txt".format(spectrum_identity), "w")
     # my_timer.reset()
