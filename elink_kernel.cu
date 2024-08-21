@@ -102,7 +102,7 @@ __device__ void get_max_score_index(float *bm25_score, int *result_prefix, int64
 __device__ void get_candidate_num(float *bm25_score, int *result_prefix, int64_t *max_score_index, int *candidate_num, int idx) {
   int left = result_prefix[idx], right = result_prefix[idx + 1];
   for (int i = left; i < right; i++) {
-    if (bm25_score[i] > 0.0) {
+    if (bm25_score[i] > bm25_score[max_score_index[idx]]) {
         candidate_num[idx]++;
     }
   }
