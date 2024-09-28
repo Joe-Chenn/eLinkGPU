@@ -13,7 +13,7 @@ import time
 import pickle
 from utils import *
 import os
-
+# from utils import data_manager
 
 def load_from_pickle(path):
     f = open(path, 'rb')
@@ -57,7 +57,7 @@ PEP_LOW_MASS = 500
 
 
 def get_max_pep_list(list_precursor_moz):
-    list_pep_mass = load_from_pickle("pep_mass_only_cross.pkl")
+    list_pep_mass = load_from_pickle("./pep_mass_only_cross.pkl")
 
     max_pep_list = []
     for moz in list_precursor_moz:
@@ -74,8 +74,7 @@ def malloc_result_matrix(max_pep_list):
 
 
 def malloc_result_record(spectrum_num):
-    return np.zeros(spectrum_num, dtype=np.int64), np.zero(spectrum_num, dtype=np.int32)
-
+    return np.zeros(spectrum_num, dtype=np.int64), np.zeros(spectrum_num, dtype=np.int32)
 
 def get_pep_prefix(max_pep_list):
     pep_prefix = [0]
@@ -85,7 +84,7 @@ def get_pep_prefix(max_pep_list):
 
 
 # 从spectrum2文件夹中找到所有specturm的路径
-def get_spectrum_path(directory='spectrum2'):
+def get_spectrum_path(directory='../spectrum2'):
     spectrum_path = []
     for filename in os.listdir(directory):
         if filename.endswith(".npz"):
@@ -100,20 +99,45 @@ def gen_prefix(array):
 
 def malloc_valid_candidate(candidate_num):
     sum_candidate = sum(candidate_num)
-    return np.zeros(sum_candidate + 1, dtype=np.float32), np.zeros(sum_candidate + 1, dtype=np.int64), gen_prefix(candidate_num)
+    return np.zeros(sum_candidate + 1, dtype=np.float32), np.zeros(sum_candidate + 1, dtype=np.int32), np.zeros(sum_candidate + 1, dtype=np.int32), gen_prefix(candidate_num)
 
-dic_path = "ion_index_only_cross.npz"
+def get_device_memory():
+    free_mem, total_mem = cuda.mem_get_info()
+
+    free_mem_gb = free_mem / (1024 ** 3)
+    total_mem_gb = total_mem / (1024 ** 3)
+
+    print(f"total/free: {total_mem_gb:.2f}/{free_mem_gb:.2f} GB")
+
+dic_path = "../ion_index_only_cross.npz"
 ion_dic, ion_prefix = load_ion_dic(dic_path)
-list_ion_num = load_from_pickle("ion_num_only_cross.pkl")
+
+ion_dic_gpu = pycuda.gpuarray.to_gpu(ion_dic)
+ion_prefix_gpu = pycuda.gpuarray.to_gpu(ion_prefix)
+
+list_ion_num = load_from_pickle("../ion_num_only_cross.pkl")
 list_ion_num_gpu = pycuda.gpuarray.to_gpu(np.array(list_ion_num, dtype=np.int32))
+
+list_pep_mass = load_from_pickle("./pep_mass_only_cross.pkl")
+list_pep_mass_gpu = pycuda.gpuarray.to_gpu(np.array(list_pep_mass, dtype=np.float32))
+
+mass_index = load_from_pickle("mass_index.pk")
+mass_index_gpu = pycuda.gpuarray.to_gpu(np.array(mass_index, dtype=np.int32))
 
 cuda_filepath = "elink_kernel.cu"
 mod = SourceModule(open(cuda_filepath).read())
 
+
 # spectrums = get_spectrum_path()
-spectrums = ["spectrum2/spectrum_80000_100000.npz"]
-search_time = 0
+spectrums = [
+            # "../spectrum2/spectrum_140000_160000.npz",
+            #  "../spectrum2/spectrum_160000_180000.npz",
+            #  "../spectrum2/spectrum_180000_200000.npz",
+             "../spectrum2/spectrum_80000_100000.npz"]
+search_time = timer()
+
 for spectrum_path in spectrums:
+    print("Processing: {}".format(spectrum_path))
     (no_linker_mz, no_linker_mz_prefix, no_linker_intensity, _,
      linker_mz, linker_mz_prefix, linker_intensity, _, precursor_mz, charge) = load_spectrum(spectrum_path)
     max_score_index, candidate_num = malloc_result_record(len(no_linker_mz_prefix))
@@ -137,8 +161,8 @@ for spectrum_path in spectrums:
     no_linker_intensity_gpu = pycuda.gpuarray.to_gpu(no_linker_intensity)
     linker_intensity_gpu = pycuda.gpuarray.to_gpu(linker_intensity)
 
-    ion_dic_gpu = pycuda.gpuarray.to_gpu(ion_dic)
-    ion_prefix_gpu = pycuda.gpuarray.to_gpu(ion_prefix)
+    precursor_mz_gpu = pycuda.gpuarray.to_gpu(precursor_mz)
+
     result_gpu = pycuda.gpuarray.to_gpu(result)
     percentage_gpu = pycuda.gpuarray.to_gpu(percentage)
     bm25_score_gpu = pycuda.gpuarray.to_gpu(bm25_score)
@@ -148,8 +172,8 @@ for spectrum_path in spectrums:
     charge_gpu = pycuda.gpuarray.to_gpu(np.array(charge, dtype=np.int32))
 
     print(("gpu malloc time: {}".format(my_timer.elapsed_and_reset())))
-
-
+    get_device_memory()
+    
     block_size = 256
     grid_size = (len(no_linker_mz_prefix) + block_size - 1) // block_size
 
@@ -161,20 +185,86 @@ for spectrum_path in spectrums:
                       ion_dic_gpu, ion_prefix_gpu, np.int32(len(ion_prefix)),
                       result_gpu, result_prefix_gpu, np.int64(len(result)),
                       max_pep_list_gpu, list_ion_num_gpu, percentage_gpu, bm25_score_gpu, charge_gpu,
-                      max_score_index_gpu, candidate_num_gpu,
+                      max_score_index_gpu, candidate_num_gpu, np.float32(1.0), list_pep_mass_gpu, np.int32(len(list_pep_mass)),
+                      precursor_mz_gpu, np.float32(TG_MASS), mass_index_gpu, 
                       block=(block_size, 1, 1), grid=(grid_size, 1))
+    # print(1)
+    print("block_size: {}, grid_size: {}".format(block_size, grid_size))
+    cuda.Context.synchronize()
+    # candidate_num = candidate_num_gpu.get()
+    # data_manager.dump(candidate_num, "candidate_num2.pkl")
+    
     print("搜索耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed_and_reset()))
-    search_time += my_timer.elapsed_and_reset()
+    
 
-    valid_candidate_score, valid_candidate_index, valid_candidate_prefix = malloc_valid_candidate(candidate_num_gpu.get())
+    no_linker_mz_gpu.gpudata.free()
+    no_linker_mz_prefix_gpu.gpudata.free()
+    linker_mz_gpu.gpudata.free()
+    linker_mz_prefix_gpu.gpudata.free()
+    no_linker_intensity_gpu.gpudata.free()
+    linker_intensity_gpu.gpudata.free()
 
-    get_candidate_num = mod.get_function("get_candidate_num")
-    my_timer.reset()
-    get_candidate_num(bm25_score_gpu, result_prefix_gpu, np.int32(len(result_prefix)))
+    # result_gpu.gpudata.free()
+    # bm25_score_gpu.gpudata.free()
+    # percentage_gpu.gpudata.free()
+    # result_prefix_gpu.gpudata.free()
+    # max_pep_list_gpu.gpudata.free()
 
+    # get_candidate_num = mod.get_function("get_valid_candidate_num")
+
+
+    # my_timer.reset()
+    # get_candidate_num(bm25_score_gpu, result_gpu, result_prefix_gpu, np.int32(len(no_linker_mz_prefix)),
+    #                    max_score_index_gpu, 1, candidate_num_gpu, 1, # TODO
+    #                    block=(block_size, 1, 1), grid=(grid_size, 1))
+    # print("获取候选集大小耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed_and_reset()))
+
+    get_candidate = mod.get_function("get_candidate")
+    candidate_num = candidate_num_gpu.get()
+    valid_candidate_score, valid_candidate_1_index, valid_candidate_2_index, valid_candidate_prefix = malloc_valid_candidate(candidate_num_gpu.get())
+    valid_candidate_score_gpu = pycuda.gpuarray.to_gpu(valid_candidate_score)
+    valid_candidate_1_index_gpu = pycuda.gpuarray.to_gpu(valid_candidate_1_index)
+    valid_candidate_2_index_gpu = pycuda.gpuarray.to_gpu(valid_candidate_2_index)
+    valid_candidate_prefix_gpu = pycuda.gpuarray.to_gpu(valid_candidate_prefix)
+
+    get_candidate(bm25_score_gpu, result_gpu, result_prefix_gpu, np.int32(len(no_linker_mz_prefix)),
+                  max_score_index_gpu, np.float32(1.0), valid_candidate_score_gpu, valid_candidate_1_index_gpu, valid_candidate_2_index_gpu, valid_candidate_prefix_gpu,
+                  list_pep_mass_gpu, np.int32(len(list_pep_mass)), precursor_mz_gpu, np.float32(TG_MASS), mass_index_gpu,
+                  block=(block_size, 1, 1), grid=(grid_size, 1))
+    cuda.Context.synchronize()
+    valid_candidate_score = valid_candidate_score_gpu.get()
+    valid_candidate_1_index = valid_candidate_1_index_gpu.get()
+    valid_candidate_2_index = valid_candidate_2_index_gpu.get()
+    bm25_score = bm25_score_gpu.get()
+    
+    valid_candidate_score_gpu.gpudata.free()
+    valid_candidate_1_index_gpu.gpudata.free()
+    valid_candidate_2_index_gpu.gpudata.free()
+    valid_candidate_prefix_gpu.gpudata.free()
+    result_gpu.gpudata.free()
+    bm25_score_gpu.gpudata.free()
+    percentage_gpu.gpudata.free()
+    result_prefix_gpu.gpudata.free()
+    max_pep_list_gpu.gpudata.free()
+    print("获取候选集耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed_and_reset()))
+
+    
+    coarse_res = []
+    for i in range(len(valid_candidate_prefix) - 1):
+        sorted_arg = np.argsort(valid_candidate_score[valid_candidate_prefix[i]: valid_candidate_prefix[i + 1]])[::-1]
+        for j in range(min(100, len(sorted_arg))):
+            coarse_res.append(
+                [i, valid_candidate_1_index[j], valid_candidate_2_index[j],
+                (bm25_score[valid_candidate_1_index[j]], bm25_score[valid_candidate_2_index[j]])]
+            )
+    spectrum_identity = spectrum_path.split("/")[-1].split(".")[0]
+    # f_result = open(, "w")
+    data_manager.dump(coarse_res, "{}_elink_result1.pkl".format(spectrum_identity))
+    print("输出结果耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed_and_reset()))
+    # cuda.Context.pop()
     # result = result_gpu.get()
 
-    # spectrum_identity = spectrum_path.split("/")[-1].split(".")[0]
+    # 
 
     # f_result = open("{}_elink_result_v2.txt".format(spectrum_identity), "w")
     # my_timer.reset()
@@ -230,18 +320,8 @@ for spectrum_path in spectrums:
 
     # print("结果写入文件耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed()))
 
-    no_linker_mz_gpu.gpudata.free()
-    no_linker_mz_prefix_gpu.gpudata.free()
-    linker_mz_gpu.gpudata.free()
-    linker_mz_prefix_gpu.gpudata.free()
-    no_linker_intensity_gpu.gpudata.free()
-    linker_intensity_gpu.gpudata.free()
-    ion_dic_gpu.gpudata.free()
-    ion_prefix_gpu.gpudata.free()
-    result_gpu.gpudata.free()
-    bm25_score_gpu.gpudata.free()
-    percentage_gpu.gpudata.free()
-    result_prefix_gpu.gpudata.free()
-    max_pep_list_gpu.gpudata.free()
 
-print("总搜索耗时: \033[1;32m{}\033[0m".format(search_time))
+
+# print("总搜索耗时: \033[1;32m{}\033[0m".format(search_time))
+
+print("总耗时: \033[1;32m{}\033[0m".format(search_time.elapsed()))

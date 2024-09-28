@@ -4,6 +4,7 @@ from tqdm import tqdm
 import numpy as np
 import time
 import os
+import pickle
 class timer:
     def __init__(self):
         self.start = time.time()
@@ -21,6 +22,20 @@ class timer:
     def elapsed(self):
         self.end = time.time()
         return round(self.end - self.start, 5)
+
+
+class data_manager:
+    @staticmethod
+    def dump(data, path):
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
+        print("Dump file to {}".format(path))
+    
+    @staticmethod
+    def load(path):
+        with open(path, 'rb') as f:
+            data = pickle.load(f)
+        return data
 
 def flatten(array: List[List], dump_path: str):
     array_list = []
