@@ -7,8 +7,7 @@ __device__ void ion_match(int *mz, int *prefix, int *ion_dic,
                           int *max_idx_mass, int idx) {
     int s_id_l = prefix[idx],
         s_id_r = prefix[idx + 1];
-    // if (idx == 210)
-    //     printf("s_id_l: %d, s_id_r: %d\n", s_id_l, s_id_r);
+
     for (int i = s_id_l; i < s_id_r; i++) {
         if (mz[i] < ion_dic_num) {
             int mz_start = floor(mz[i] - mz[i] * 0.00002);
@@ -270,7 +269,7 @@ __global__ void compute_ion_match(int *no_linker_mz, int *no_linker_mz_prefix, i
                   ion_dic, ion_dic_prefix, ion_dic_num, matched, result_prefix,
                   result_num, max_idx_mass, idx);
         // if (idx == 130)
-        //     printf("matched: %lf\n", precursor_mass_list[2312]);
+        // //     printf("matched: %lf\n", precursor_mass_list[2312]);
         calc_percentage(matched, result_prefix, max_idx_mass, pep_ion_num, percentage, idx, charge[idx]);
         // if (idx == 130)
         //     printf("percentage  : %f\n", percentage[result_prefix[idx] + 0]);
