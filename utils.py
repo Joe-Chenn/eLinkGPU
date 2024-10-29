@@ -7,6 +7,9 @@ import os
 import pickle
 import pycuda.driver as cuda
 from pycuda.compiler import SourceModule
+
+TG_MASS = -17.026549101
+PROTON_MASS = 1.00727645224
 class CudaModule:
     def __init__(self, path):
         self.mod = SourceModule(open(path).read())

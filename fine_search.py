@@ -7,7 +7,9 @@ import cupy as cp
 import numpy as np
 import pycuda.gpuarray
 
-TG_MASS = -17.026549101
+import utils
+
+
 
 
 def generate_pep_info(protein_list, list_useful_result, spectrum_idx, one_spectrum_res,
@@ -59,7 +61,7 @@ def generate_pep_info(protein_list, list_useful_result, spectrum_idx, one_spectr
                     alpha_ion, alpha_ion_same_num,
                     beta_ion, beta_ion_same_num,
                     all_ion, all_ion_same_num,
-                    delta_alpha_ion, delta_beta_ion,
+                    delta_beta_ion,
                     spectrum_idx))
     return res
 
@@ -118,16 +120,20 @@ def multi_process_generate_pep_info(protein_list, list_useful_result, coarse_res
         res.extend(r)
     return res
 
+
 def malloc_result(array):
     prefix = [0]
     for num in array:
         prefix.append(prefix[-1] + num)
     return np.zeros(prefix[-1], dtype=np.float32), prefix
+
+
 class PEP_TYPE(Enum):
     ALPHA = 0
     BETA = 1
-    DELTA = 2
-    ALL = 3
+    ALL = 2
+    DELTA = 3
+
 
 def get_continue_score(pep_info, list_useful_data,
                        flatten_mz_list, flatten_mz_list_prefix,
@@ -183,7 +189,10 @@ def get_match_score(pep_info,
     pep_ion_list_gpu = gpuarray.to_gpu(pep_ion_list)
     pep_ion_prefix_gpu = gpuarray.to_gpu(pep_ion_prefix)
 
-    same_ion_list, _ = flatten(pep_info, pep_type.value() * 2 + 7)
+    if pep_type != PEP_TYPE.DELTA:
+        same_ion_list, _ = flatten(pep_info, pep_type.value() * 2 + 7)
+    else:
+        same_ion_list = np.ones(len(pep_ion_list), dtype=np.int32)
     same_ion_list_gpu = gpuarray.to_gpu(same_ion_list)
 
     get_match_score = cuda_module.get_function("get_match_score")
@@ -218,7 +227,7 @@ def get_match_score(pep_info,
     block_size = 512
     grid_size = (len(pep_info) + block_size - 1) // block_size
     get_match_score(
-        pep_ion_list_gpu, same_ion_list_gpu,pep_ion_prefix_gpu,
+        pep_ion_list_gpu, same_ion_list_gpu, pep_ion_prefix_gpu,
         flatten_mz_list, flatten_intensity_list, flatten_mz_list_prefix,
         max_intensity_list, total_intensity_list,
         match_score_gpu, match_intensity_gpu,
@@ -250,6 +259,7 @@ def get_structured_data(match_score, match_intensity, da_list, ppm_list, match_n
             match_ion_num[i], match_intensity[i],
             spectrum_total_intensity[i], []))
     return res
+
 
 def flatten_spectrum(list_fine_data):
     precursor_list = []
@@ -289,18 +299,187 @@ def flatten_spectrum(list_fine_data):
 # TODO: Implement the following function
 coarse_res = None
 list_useful_result = None
+list_fine_data = None
 protein_list = None
 list_link_site = None
-list_fine_data = None
+
+all_fine_score = []
+cuda_module = utils.CudaModule("fine_search_kernel.cu")
 for left, right in dynamic_load_coarse_res(coarse_res, list_useful_result, protein_list):
-    ret = multi_process_generate_pep_info(protein_list, list_useful_result, coarse_res[left:right], list_link_site)
+    pep_info = multi_process_generate_pep_info(protein_list, list_useful_result, coarse_res[left:right], list_link_site)
     (precursor_list,
      max_intensity_list,
      total_intensity_list,
      flatten_moz_list,
      flatten_moz_list_prefix,
      flatten_intensity_list,
-     flatten_intensity_list_prefix,
+     _,
      flatten_moz_index_list,
      flatten_moz_index_list_prefix) = flatten_spectrum(list_fine_data[left:right])
 
+    max_intensity_list_gpu = gpuarray.to_gpu(max_intensity_list)
+    total_intensity_list_gpu = gpuarray.to_gpu(total_intensity_list)
+    flatten_moz_list_gpu = gpuarray.to_gpu(flatten_moz_list)
+    flatten_moz_list_prefix_gpu = gpuarray.to_gpu(flatten_moz_list_prefix)
+    flatten_intensity_list_gpu = gpuarray.to_gpu(flatten_intensity_list)
+    flatten_moz_index_list_gpu = gpuarray.to_gpu(flatten_moz_index_list)
+    flatten_moz_index_list_prefix_gpu = gpuarray.to_gpu(flatten_moz_index_list)
+
+    alpha_pep_match_result = get_match_score(
+        pep_info, flatten_moz_list_gpu, flatten_intensity_list_gpu, flatten_moz_list_prefix_gpu,
+        max_intensity_list_gpu, total_intensity_list_gpu, cuda_module, PEP_TYPE.ALPHA)
+    beta_pep_match_result = get_match_score(
+        pep_info, flatten_moz_list_gpu, flatten_intensity_list_gpu, flatten_moz_list_prefix_gpu,
+        max_intensity_list_gpu, total_intensity_list_gpu, cuda_module, PEP_TYPE.BETA)
+    all_pep_match_result = get_match_score(
+        pep_info, flatten_moz_list_gpu, flatten_intensity_list_gpu, flatten_moz_list_prefix_gpu,
+        max_intensity_list_gpu, total_intensity_list_gpu, cuda_module, PEP_TYPE.ALL)
+    delta_pep_match_result = get_match_score(
+        pep_info, flatten_moz_list_gpu, flatten_intensity_list_gpu, flatten_moz_list_prefix_gpu,
+        max_intensity_list_gpu, total_intensity_list_gpu, cuda_module, PEP_TYPE.DELTA)
+
+    alpha_continue_score, _ = get_continue_score(
+        pep_info, list_useful_result, flatten_moz_list_gpu, flatten_moz_list_prefix_gpu,
+        flatten_moz_index_list_gpu, flatten_moz_index_list_prefix_gpu, cuda_module, PEP_TYPE.ALPHA)
+    beta_continue_score, _ = get_continue_score(
+        pep_info, list_useful_result, flatten_moz_list_gpu, flatten_moz_list_prefix_gpu,
+        flatten_moz_index_list_gpu, flatten_moz_index_list_prefix_gpu, cuda_module, PEP_TYPE.BETA)
+
+    for i in range(len(pep_info)):
+        if len(pep_info[i][10]) == 0:
+            pep_part_1_score = 0.0
+        else:
+            pep_part_1_score = (
+                    all_pep_match_result[i].match_ion_score *
+                    len(all_pep_match_result[i].list_ppm) / len(pep_info[i][10])
+            )
+
+        pep_part_2_score = sum(alpha_continue_score[i])
+        pep_part_3_score = sum(beta_continue_score[i])
+        # for j in range(len(alpha_continue_score[i])):
+        #     pep_part_2_score += alpha_continue_score[i][j]
+        # for j in range(len(beta_continue_score[i])):
+        #     pep_part_3_score += beta_continue_score[j]
+        if len(pep_info[i][6]) == 0:
+            pep_part_4_score = 0.0
+        else:
+            pep_part_4_score = (
+                    alpha_pep_match_result[i].match_ion_score *
+                    len(alpha_pep_match_result[i].list_ppm) / len(pep_info[i][6])
+            )
+
+        if len(pep_info[i][8]) == 0:
+            pep_part_5_score = 0.0
+        else:
+            pep_part_5_score = (
+                    beta_pep_match_result[i].match_ion_score *
+                    len(beta_pep_match_result[i].list_ppm) / len(pep_info[i][8])
+            )
+
+        if len(alpha_pep_match_result[i].list_ppm) == 0:
+            alpha_pep_score = 0.0
+            alpha_percent = 0.0
+        else:
+            alpha_percent = len(alpha_pep_match_result[i].list_ppm) / len(pep_info[i][6])
+            alpha_pep_score = alpha_pep_match_result[i].match_ion_score * alpha_percent
+
+        if len(beta_pep_match_result[i].list_ppm) == 0:
+            beta_pep_score = 0.0
+            beta_pep_percent = 0.0
+        else:
+            beta_pep_percent = len(beta_pep_match_result[i].list_ppm) / len(pep_info[i][8])
+            beta_pep_score = beta_pep_match_result[i].match_ion_score * beta_pep_percent
+
+        pep_score = pep_part_1_score + pep_part_2_score + pep_part_3_score + pep_part_4_score + pep_part_5_score
+        cross_link_pep_mass = list_useful_result[pep_info[i][0]].mass + utils.TG_MASS + list_useful_result[pep_info[i][1]].mass + utils.PROTON_MASS
+        precursor_mass_erro_Da = list_fine_data[pep_info[i][-1]].mass - cross_link_pep_mass
+        precursor_mass_erro_ppm = precursor_mass_erro_Da / cross_link_pep_mass * 1e6
+
+        if (len(all_pep_match_result[i].list_ppm) < 3 or
+            len(alpha_pep_match_result[i].list_ppm) < 1 or
+            len(beta_pep_match_result[i].list_ppm) < 1):
+            pass
+        else:
+
+            ppm_sum = np.sum(np.abs(np.array(all_pep_match_result[i].list_ppm)))
+            ppm_average = np.mean(np.abs(np.array(all_pep_match_result[i].list_ppm)))
+            # 求方差
+            ppm_var = np.var(np.abs(np.array(all_pep_match_result[i].list_ppm)))
+
+            try:
+                pParseNum = int(list_fine_data[pep_info[i][-1]].title.split('.')[4])
+            except:
+                pParseNum = 0
+
+            if list_fine_data[pep_info[i][-1]].mobility is None:
+                mobility = 0
+            else:
+                mobility = list_fine_data[pep_info[i][-1]].mobility
+
+            if alpha_pep_match_result[i].match_ion_score > 0 and beta_pep_match_result[i].match_ion_score > 0:
+                if alpha_pep_match_result[i].match_ion_score > beta_pep_match_result[i].match_ion_score:
+
+                    crosslink_delta_score = delta_pep_match_result[i].match_ion_score
+                    peptide_feature = fine_search_utils.CRerankTwoPeptideFeature(0,
+                                                               pep_score, alpha_pep_score, beta_pep_score,
+                                                               ppm_sum, ppm_average, ppm_var,
+                                                               all_pep_match_result[i],
+                                                               pep_part_2_score, pep_part_3_score,
+                                                               0,
+                                                               0, 0,
+                                                               0.0, crosslink_delta_score,
+                                                               mobility,
+                                                               0, pParseNum, 0)
+                    if abs(precursor_mass_erro_ppm) < 20 * 1e6:
+                        one_COnlyCrossResult = fine_search_utils.COnlyCrossResult(list_fine_data[pep_info[i][-1]],
+                                                                                  alpha_pep_match_result[i],
+                                                                                  beta_pep_match_result[i],
+                                                                peptide_feature, list_link_site[pep_info[i][0]][0],
+                                                                list_link_site[pep_info[i][1]][0])
+                        fine_search_utils.op_fill_COnlyCrossResult(one_COnlyCrossResult, cross_link_pep_mass,
+                                                 pep_score, alpha_pep_score, beta_pep_score,
+                                                 precursor_mass_erro_Da,
+                                                 precursor_mass_erro_ppm,
+                                                 alpha_pep_match_result[i],
+                                                 beta_pep_match_result[i],
+                                                 [all_pep_match_result[i],
+                                                  pep_part_1_score, pep_part_2_score, pep_part_3_score,
+                                                  pep_part_4_score, pep_part_5_score]
+                                                 )
+                        # return one_COnlyCrossResult
+                        all_fine_score.append(one_COnlyCrossResult)
+                else:
+                    crosslink_delta_score = delta_pep_match_result[i].match_ion_score
+
+                    peptide_feature = fine_search_utils.CRerankTwoPeptideFeature(0,
+                                                                                 pep_score,
+                                                                                 beta_pep_score,
+                                                                                 alpha_pep_score,
+                                                                                 ppm_sum, ppm_average, ppm_var,
+                                                                                 all_pep_match_result[i],
+                                                                                 pep_part_2_score, pep_part_3_score,
+                                                                                 0,
+                                                                                 0, 0,
+                                                                                 0.0, crosslink_delta_score,
+                                                                                 mobility,
+                                                                                 0, pParseNum, 0)
+                    if abs(precursor_mass_erro_ppm) < 20 * 1e6:
+                        one_COnlyCrossResult = fine_search_utils.COnlyCrossResult(list_fine_data[pep_info[i][-1]],
+                                                                                  beta_pep_match_result[i],
+                                                                                  alpha_pep_match_result[i],
+                                                                                  peptide_feature,
+                                                                                  list_link_site[pep_info[i][1]][0],
+                                                                                  list_link_site[pep_info[i][0]][0])
+                        fine_search_utils.op_fill_COnlyCrossResult(one_COnlyCrossResult, cross_link_pep_mass,
+                                                                   pep_score, beta_pep_score, alpha_pep_score,
+                                                                   precursor_mass_erro_Da,
+                                                                   precursor_mass_erro_ppm,
+                                                                   beta_pep_match_result[i],
+                                                                   alpha_pep_match_result[i],
+                                                                   [all_pep_match_result[i],
+                                                                    pep_part_1_score, pep_part_2_score,
+                                                                    pep_part_3_score,
+                                                                    pep_part_4_score, pep_part_5_score]
+                                                                   )
+                        # return one_COnlyCrossResult
+                        all_fine_score.append(one_COnlyCrossResult)

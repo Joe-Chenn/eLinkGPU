@@ -222,6 +222,22 @@ def op_get_peptide_continue_score(input_continue_data,
         out_pep_cover.append(tmp_out_pep_cover)
 
 
+
+def op_fill_COnlyCrossResult(input_COnlyCrossResult, mass, pep_score, alpha_pep_score, beta_pep_score,
+                             pep_precursor_bias_Da, pep_precursor_bias_ppm, alpha_match_data=[], beta_match_data=[],
+                             other_data=[]):
+    input_COnlyCrossResult.pep_mass = mass
+    input_COnlyCrossResult.pep_precursor_bias_Da = pep_precursor_bias_Da
+    input_COnlyCrossResult.pep_precursor_bias_ppm = pep_precursor_bias_ppm
+    input_COnlyCrossResult.pep_score = pep_score
+    input_COnlyCrossResult.alpha_pep_score = alpha_pep_score
+    input_COnlyCrossResult.beta_pep_score = beta_pep_score
+
+    input_COnlyCrossResult.other_data = other_data
+    input_COnlyCrossResult.alpha_pep_match_data = alpha_match_data
+    input_COnlyCrossResult.beta_pep_match_data = beta_match_data
+
+
 class CMatchIonScore:
 
     def __init__(self, match_ion_score, list_Da, list_ppm, match_ion_num_percent, match_ion_inten_percent,
@@ -239,3 +255,81 @@ class CMatchIonScore:
         self.spe_inten_sum = spe_inten_sum
         self.other_data = other_data
 
+
+
+class CRerankTwoPeptideFeature:
+    def __init__(self, rerank_score,
+                 match_score, match_alpha_score, match_beta_score,
+                 match_error_sum, match_error_average, match_error_var,
+                 CMATCH_ion_score,
+                 continue_alpha_score, continue_beta_score,
+                 spectrum_data,
+                 alpha_pep_len, beta_pep_len,
+                 precursor_bias, crosslink_delta_score,
+                 mobility,
+                 delta_score=0, pParseNum=0, FDR=0):
+        # 分数类的特征
+        self.rerank_score = rerank_score
+        self.match_score = match_score
+        self.match_alpha_score = match_alpha_score
+        self.match_beta_score = match_beta_score
+        # 匹配碎片离子偏差类特征
+        self.match_error_sum = match_error_sum
+        self.match_error_average = match_error_average
+        self.match_error_var = match_error_var
+        # 匹配上数目和总强度类特征
+        self.match_ion_score = CMATCH_ion_score.match_ion_score
+        self.match_ion_num = CMATCH_ion_score.match_ion_num
+        self.match_ion_intensity = CMATCH_ion_score.match_inten_sum
+        # 匹配上离子的百分比特征
+        self.match_ion_num_percent = CMATCH_ion_score.match_ion_num_percent
+        self.match_ion_intensity_percent = CMATCH_ion_score.match_ion_inten_percent
+        # 匹配对于谱图的百分比特征
+        self.match_spe_ion_percent = CMATCH_ion_score.match_spe_ion_percent
+        self.match_spe_inten_percent = CMATCH_ion_score.match_spe_inten_percent
+        # 连续性的特征
+        self.continue_alpha_score = continue_alpha_score
+        self.continue_beta_score = continue_beta_score
+        # 其他和分数以及匹配情况不太相关的特征
+
+        # 谱图的特征
+        if spectrum_data.max_int == 0 or len(spectrum_data.peaks) == 0:
+            self.spectrum_average_intensity = 0.0
+        else:
+            self.spectrum_average_intensity = spectrum_data.all_int / spectrum_data.max_int / len(spectrum_data.peaks)
+
+        # 肽段的特征
+        self.alpha_pep_len = alpha_pep_len
+        self.beta_pep_len = beta_pep_len
+
+        # 和肽段母离子相关的
+        self.precursor_bias = precursor_bias
+        self.delta_score = delta_score
+        self.pParseNum = pParseNum
+        self.mobility = mobility
+        # 两条肽段差别的分数
+        self.crosslink_delta_score = crosslink_delta_score
+
+        self.FDR = FDR
+
+class COnlyCrossResult():
+    def __init__(self, one_spectrum_data, alpha_pep_data, beta_pep_data, peptide_feature, alpha_pep_cross_site,
+                 beta_pep_cross_site):
+        self.spectrum_title = one_spectrum_data.title
+        self.spectrum_charge = one_spectrum_data.charge
+        self.spectrum_mass = one_spectrum_data.mass
+        self.mobility = one_spectrum_data.mobility
+
+        self.alpha_pep_data = alpha_pep_data
+        self.alpha_pep_cross_site = alpha_pep_cross_site
+        self.beta_pep_data = beta_pep_data
+        self.beta_pep_cross_site = beta_pep_cross_site
+        self.pep_mass = 0.0
+        self.pep_precursor_bias_Da = 0.0
+        self.pep_precursor_bias_ppm = 0.0
+        self.pep_score = 0.0
+        self.alpha_pep_score = 0.0
+        self.beta_pep_score = 0.0
+        self.alpha_pep_match_data = []
+        self.beta_pep_match_data = []
+        self.feature = peptide_feature
