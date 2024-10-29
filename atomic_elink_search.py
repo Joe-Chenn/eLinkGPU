@@ -69,7 +69,7 @@ def get_max_pep_list(list_precursor_moz):
     max_pep_list = []
     left = 0
     free_mem, _ = cuda.mem_get_info()
-    threshold = free_mem // 4 //5
+    threshold = free_mem // 4 // 5
     for idx, moz in enumerate(list_precursor_moz):
         index_end_candidate_peptide = tool_binary_search(
             list_pep_mass, moz - PEP_LOW_MASS - TG_MASS
@@ -132,14 +132,6 @@ def malloc_valid_candidate(candidate_num):
         gen_prefix(candidate_num),
     )
 
-
-def get_device_memory():
-    free_mem, total_mem = cuda.mem_get_info()
-
-    free_mem_gb = free_mem / (1024**3)
-    total_mem_gb = total_mem / (1024**3)
-
-    print(f"total/free: {total_mem_gb:.2f}/{free_mem_gb:.2f} GB")
 
 
 def preprocess_link_site(link_site):
@@ -223,10 +215,10 @@ print(f"当前内存占用: {memory_info.rss / 1024 ** 3:.2f} GB")  # 转换为G
 # spectrums = get_spectrum_path()
 spectrum_path = "../spectrum2/spectrum_0_20000.npz"
 
-search_time = timer()
+search_time = Timer()
 
 res = []
-get_device_memory()
+utils.get_device_memory()
 for (
     left,
     right,
@@ -265,7 +257,7 @@ for (
     bm25_score = malloc_result_matrix(max_pep_list)
     result_prefix = get_pep_prefix(max_pep_list)
 
-    my_timer = utils.timer()
+    my_timer = utils.Timer()
     my_timer.reset()
     no_linker_mz_gpu = pycuda.gpuarray.to_gpu(no_linker_mz)
     no_linker_mz_prefix_gpu = pycuda.gpuarray.to_gpu(no_linker_mz_prefix)
@@ -287,7 +279,7 @@ for (
     charge_gpu = pycuda.gpuarray.to_gpu(np.array(charge, dtype=np.int32))
 
     print(("gpu malloc time: {}".format(my_timer.elapsed_and_reset())))
-    get_device_memory()
+    utils.get_device_memory()
 
 
 

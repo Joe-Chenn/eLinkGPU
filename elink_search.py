@@ -169,7 +169,7 @@ spectrums = [
     # "../spectrum2/spectrum_160000_180000.npz",
     # "../spectrum2/spectrum_180000_200000.npz",
 ]
-search_time = timer()
+search_time = Timer()
 
 for spectrum_path in spectrums:
     print("Processing: {}".format(spectrum_path))
@@ -199,7 +199,7 @@ for spectrum_path in spectrums:
     bm25_score = malloc_result_matrix(max_pep_list)
     result_prefix = get_pep_prefix(max_pep_list)
 
-    my_timer = utils.timer()
+    my_timer = utils.Timer()
     my_timer.reset()
     no_linker_mz_gpu = pycuda.gpuarray.to_gpu(no_linker_mz)
     no_linker_mz_prefix_gpu = pycuda.gpuarray.to_gpu(no_linker_mz_prefix)

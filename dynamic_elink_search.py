@@ -207,7 +207,7 @@ print(f"当前内存占用: {memory_info.rss / 1024 ** 3:.2f} GB")  # 转换为G
 # spectrums = get_spectrum_path()
 spectrum_path = "../spectrum2/spectrum_0_20000.npz"
 
-search_time = timer()
+search_time = Timer()
 
 res = []
 get_device_memory()
@@ -241,7 +241,7 @@ for (
     bm25_score = malloc_result_matrix(max_pep_list)
     result_prefix = get_pep_prefix(max_pep_list)
 
-    my_timer = utils.timer()
+    my_timer = utils.Timer()
     my_timer.reset()
     no_linker_mz_gpu = pycuda.gpuarray.to_gpu(no_linker_mz)
     no_linker_mz_prefix_gpu = pycuda.gpuarray.to_gpu(no_linker_mz_prefix)
