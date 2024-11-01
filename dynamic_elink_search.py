@@ -65,15 +65,27 @@ PEP_LOW_MASS = 500
 
 def get_max_pep_list(list_precursor_moz):
     list_pep_mass = load_from_pickle("./pep_mass_only_cross.pkl")
-
+    sum_pep = 0
     max_pep_list = []
-    for moz in list_precursor_moz:
+    left = 0
+    free_mem, _ = cuda.mem_get_info()
+    threshold = free_mem // 4 //5
+    for idx, moz in enumerate(list_precursor_moz):
         index_end_candidate_peptide = tool_binary_search(
             list_pep_mass, moz - PEP_LOW_MASS - TG_MASS
         )
+        if sum_pep + index_end_candidate_peptide + 1 > threshold:
+            yield left, idx, max_pep_list
+            max_pep_list = []
+            sum_pep = 0
+            left = idx
+            free_mem, _ = cuda.mem_get_info()
+            threshold = free_mem // 4 // 5
         max_pep_list.append(index_end_candidate_peptide + 1)
-
-    return max_pep_list
+        sum_pep += index_end_candidate_peptide + 1
+    
+    if len(max_pep_list) > 0:
+        yield left, len(list_precursor_moz), max_pep_list
 
 
 def malloc_result_matrix(max_pep_list):
@@ -137,6 +149,36 @@ def preprocess_link_site(link_site):
     return processed
 
 
+def dynamic_split(path):
+    (
+    no_linker_mz,
+    no_linker_mz_prefix,
+    no_linker_intensity,
+    _,
+    linker_mz,
+    linker_mz_prefix,
+    linker_intensity,
+    _,
+    precursor_mz,
+    charge,
+    ) = load_spectrum(spectrum_path)
+
+    
+
+    for left, right, max_pep_list in get_max_pep_list(precursor_mz):
+        yield (
+            left, right,
+            no_linker_mz[no_linker_mz_prefix[left]:no_linker_mz_prefix[right]],
+            no_linker_mz_prefix[left:right+1] - no_linker_mz_prefix[left],
+            no_linker_intensity[no_linker_mz_prefix[left]:no_linker_mz_prefix[right]],
+            linker_mz[linker_mz_prefix[left]:linker_mz_prefix[right]],
+            linker_mz_prefix[left:right+1] - linker_mz_prefix[left],
+            linker_intensity[linker_mz_prefix[left]:linker_mz_prefix[right]],
+            precursor_mz[left:right],
+            charge[left:right],
+            max_pep_list
+        )
+
 dic_path = "ion_index_only_cross_bin.npz"
 ion_dic, ion_prefix = load_ion_dic(dic_path)
 
@@ -162,39 +204,39 @@ process = psutil.Process()
 # 获取内存信息
 memory_info = process.memory_info()
 print(f"当前内存占用: {memory_info.rss / 1024 ** 3:.2f} GB")  # 转换为GB
-spectrums = get_spectrum_path()
-spectrums = [
-    "../spectrum2/spectrum_60000_80000.npz",
-    # "../spectrum2/spectrum_140000_160000.npz",
-    # "../spectrum2/spectrum_160000_180000.npz",
-    # "../spectrum2/spectrum_180000_200000.npz",
-]
+# spectrums = get_spectrum_path()
+spectrum_path = "../spectrum2/spectrum_0_20000.npz"
+
 search_time = Timer()
 
-for spectrum_path in spectrums:
-    print("Processing: {}".format(spectrum_path))
-    (
-        no_linker_mz,
-        no_linker_mz_prefix,
-        no_linker_intensity,
-        _,
-        linker_mz,
-        linker_mz_prefix,
-        linker_intensity,
-        _,
-        precursor_mz,
-        charge,
-    ) = load_spectrum(spectrum_path)
-    max_score_index, candidate_num = malloc_result_record(len(no_linker_mz_prefix))
+res = []
+get_device_memory()
+for (
+    left,
+    right,
+    no_linker_mz,
+    no_linker_mz_prefix,
+    no_linker_intensity,
+    linker_mz,
+    linker_mz_prefix,
+    linker_intensity,
+    precursor_mz,
+    charge,
+    max_pep_list,
+) in dynamic_split(spectrum_path):
+
+    print("Processing: {}, {}-{}".format(spectrum_path, left, right))
+
+    max_score_index, candidate_num = malloc_result_record(len(no_linker_mz_prefix) - 1)
     max_score_index_gpu = pycuda.gpuarray.to_gpu(max_score_index)
     candidate_num_gpu = pycuda.gpuarray.to_gpu(candidate_num)
 
-    max_pep_list = get_max_pep_list(precursor_mz)
+
     result = malloc_result_matrix(max_pep_list)
     print("len: {}".format(len(result)))
-    # process = psutil.Process()
-    # memory_info = process.memory_info()
-    # print(f"当前内存占用: {memory_info.rss / 1024 ** 3:.2f} GB")  # 转换为GB
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    print(f"当前内存占用: {memory_info.rss / 1024 ** 3:.2f} GB")  # 转换为GB
     percentage = malloc_result_matrix(max_pep_list)
     bm25_score = malloc_result_matrix(max_pep_list)
     result_prefix = get_pep_prefix(max_pep_list)
@@ -223,7 +265,7 @@ for spectrum_path in spectrums:
     print(("gpu malloc time: {}".format(my_timer.elapsed_and_reset())))
     get_device_memory()
 
-    block_size = 256
+    block_size = 128
     grid_size = (len(no_linker_mz_prefix) + block_size - 1) // block_size
 
     compute_ion_match = mod.get_function("compute_ion_match")
@@ -386,71 +428,12 @@ for spectrum_path in spectrums:
                     ),
                 )
             )
-    spectrum_identity = spectrum_path.split("/")[-1].split(".")[0]
-    # f_result = open(, "w")
     print("输出结果耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed_and_reset()))
-    data_manager.dump(coarse_res, "{}_elink_result1111.pkl".format(spectrum_identity))
+    res += coarse_res
+# spectrum_identity = spectrum_path.split("/")[-1].split(".")[0]
+# f_result = open(, "w")
 
-    # cuda.Context.pop()
-    # result = result_gpu.get()
+data_manager.dump(res, "{}_elink_result1111.pkl".format(spectrum_path))
 
-    #
-
-    # f_result = open("{}_elink_result_v2.txt".format(spectrum_identity), "w")
-    # my_timer.reset()
-
-    # for i in range(len(result_prefix) - 1):
-    #     result_one = result[result_prefix[i]: result_prefix[i + 1]]
-
-    #     sorted_indices = np.argsort(result_one)[::-1]
-    #     if len(result_one) == 0:
-    #         f_result.write("\n".format(i))
-    #     else:
-    #         # f_result.write("".format(i, np.argmax(result_one), np.max(result_one)))
-    #         for j in range(min(10, len(sorted_indices))):
-    #             f_result.write("{}\t".format(sorted_indices[j]))
-    #         f_result.write("\n")
-
-    # print("写入match文件耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed()))
-
-    # percentage = percentage_gpu.get()
-    # f_percentage = open("{}_elink_percentage.txt".format(spectrum_identity), "w")
-    # my_timer.reset()
-
-    # for i in range(len(result_prefix) - 1):
-    #     result_one = percentage[result_prefix[i]: result_prefix[i + 1]]
-    #     sorted_indices = np.argsort(result_one)[::-1]
-    #     if len(result_one) == 0:
-    #         f_percentage.write("\n".format(i))
-    #     else:
-    #         # f_result.write("".format(i, np.argmax(result_one), np.max(result_one)))
-    #         for j in range(min(10, len(sorted_indices))):
-    #             f_percentage.write("{}\t".format(sorted_indices[j]))
-    #         f_percentage.write("\n")
-
-    # print("写入percentage文件耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed()))
-
-    # bm25_score = bm25_score_gpu.get()
-    # f_bm25 = open("{}_elink_bm25_score.txt".format(spectrum_identity), "w")
-    # my_timer.reset()
-
-    # for i in range(len(result_prefix) - 1):
-
-    #     result_one = bm25_score[result_prefix[i]: result_prefix[i + 1]]
-    #     if i == 2:
-    #         print(result_one[9436])
-    #     sorted_indices = np.argsort(result_one)[::-1]
-    #     if len(result_one) == 0:
-    #         f_bm25.write("\n".format(i))
-    #     else:
-    #         # f_result.write("".format(i, np.argmax(result_one), np.max(result_one)))
-    #         for j in range(min(10, len(sorted_indices))):
-    #             f_bm25.write("{}\t".format(sorted_indices[j]))
-    #         f_bm25.write("\n")
-
-    # print("结果写入文件耗时: \033[1;32m{}\033[0m".format(my_timer.elapsed()))
-
-
-# print("总搜索耗时: \033[1;32m{}\033[0m".format(search_time))
 
 print("总耗时: \033[1;32m{}\033[0m".format(search_time.elapsed()))
